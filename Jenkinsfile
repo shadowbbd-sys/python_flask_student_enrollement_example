@@ -34,7 +34,7 @@ pipeline {
             }
         }
 
-        // ---- Edited SonarQube stage (auth + quality gate wait) ----
+        // ---- SonarQube stage (auth + quality gate wait) ----
         stage('Code Quality: SonarQube') {
             environment {
                 // Pull the token from Jenkins credentials (Secret Text)
@@ -93,9 +93,14 @@ pipeline {
             }
         }
 
+        // ---- Modified Push stage: robust branch detection fallback ----
         stage('Push Image: Docker Hub') {
             when {
-                expression { return env.BRANCH_NAME ==~ /(?i)main|master/ }
+                expression {
+                    // Use BRANCH_NAME if available (multibranch), else fall back to GIT_BRANCH or empty string
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''
+                    return branch ==~ /(?i).*?(main|master).*?/
+                }
             }
             steps {
                 withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CRED_ID}", usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
