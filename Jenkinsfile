@@ -6,7 +6,7 @@ pipeline {
         IMAGE_TAG = "${BUILD_ID}"
         SONAR_CRED_ID = "sonar-token"
         DOCKERHUB_CRED_ID = "dockerhub-creds"
-        SONAR_HOST = "http://localhost:9000"
+        SONAR_HOST = "http://host.docker.internal:9000"
     }
 
     stages {
