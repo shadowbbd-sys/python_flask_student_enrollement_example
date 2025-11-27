@@ -1,12 +1,12 @@
 pipeline {
-    agent any  // Windows controller itself runs the pipeline
+    agent any
 
     environment {
-        IMAGE_BASE = "shadowbbd/python-flask-student"   // update
+        IMAGE_BASE = "shadowbbd/python-flask-student"   // update if needed
         IMAGE_TAG = "${BUILD_ID}"
         SONAR_CRED_ID = "sonar-token"
         DOCKERHUB_CRED_ID = "dockerhub-creds"
-        SONAR_HOST = "http://localhost:9000" // change to your Sonar URL
+        SONAR_HOST = "http://localhost:9000"
     }
 
     stages {
@@ -27,8 +27,9 @@ pipeline {
 
         stage('Unit Tests (pytest)') {
             steps {
+                // Run tests inside the Linux container using /bin/sh -c (not cmd)
                 bat """
-                docker run --rm %IMAGE_BASE%:%IMAGE_TAG% cmd /c "pip install -r requirements.txt && pytest -q"
+                docker run --rm %IMAGE_BASE%:%IMAGE_TAG% /bin/sh -c "pip install -r requirements.txt && pytest -q"
                 """
             }
         }
@@ -53,10 +54,16 @@ pipeline {
 
         stage('Security Scan: Trivy') {
             steps {
+                // Option A: Use the Trivy Windows binary (recommended on Windows)
+                // Put trivy.exe on the agent PATH, then run:
+                // bat "trivy image --format json --output trivy-report.json %IMAGE_BASE%:%IMAGE_TAG%"
+
+                // Option B: Run dockerized Trivy and attempt to mount docker socket (may need WSL2/Linux containers)
                 bat """
                 docker run --rm -v //var/run/docker.sock:/var/run/docker.sock ^
-                  aquasec/trivy:latest image --format json --output trivy-report.json %IMAGE_BASE%:%IMAGE_TAG%
+                  aquasec/trivy:latest image --format json --output trivy-report.json %IMAGE_BASE%:%IMAGE_TAG% || exit 0
                 """
+                // Note: the above may fail if Docker Desktop is in Windows container mode or socket path differs.
             }
         }
 
@@ -80,9 +87,7 @@ pipeline {
 
     post {
         always {
-            bat """
-            docker image prune -f
-            """
+            bat "docker image prune -f || exit 0"
         }
     }
 }
