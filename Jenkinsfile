@@ -1,16 +1,13 @@
-// Jenkinsfile - Declarative CI-only pipeline for your repo
+// Jenkinsfile - corrected (Declarative CI-only)
 pipeline {
-  agent { label 'docker' } // use node with docker; change to 'any' if appropriate
+  agent { label 'docker' }
 
   environment {
-    IMAGE_BASE = "yourdockeruser/python-flask-student"   // update
+    IMAGE_BASE = "yourdockeruser/python-flask-student"   // <- update to your Docker Hub repo
     IMAGE_TAG = "${env.BUILD_ID}"
-    SONAR_CRED_ID = 'sonar-token'          // Jenkins secret text id (create this)
-    DOCKERHUB_CRED_ID = 'dockerhub-creds'  // Jenkins username/password id
-    AWS_CRED_ID = 'aws-creds'              // optional, if you want to push to ECR
-    SONAR_HOST = "http://sonarqube:9000"   // change to your SonarQube URL
-    // Fail build if Trivy finds HIGH/CRITICAL by default
-    TRIVY_FAIL_LEVEL = "HIGH"
+    SONAR_CRED_ID = 'sonar-token'          // <- update if different
+    DOCKERHUB_CRED_ID = 'dockerhub-creds'  // <- update if different
+    SONAR_HOST = "http://sonarqube:9000"   // <- update to your SonarQube URL
   }
 
   options {
@@ -36,16 +33,18 @@ pipeline {
     stage('Unit Tests (pytest)') {
       steps {
         script {
-          // run pytest inside a short-lived container with the image (isolated)
+          // Run tests inside container for isolation
           sh """
-            docker run --rm ${IMAGE_BASE}:${IMAGE_TAG} /bin/sh -c "pip install -r requirements.txt && pytest -q || true"
-            # Copy test output from host if you use mounted volumes or generate junit xml in container
+            docker run --rm ${IMAGE_BASE}:${IMAGE_TAG} /bin/sh -c "pip install -r requirements.txt && pytest -q"
           """
         }
       }
       post {
+        // ensure this post block is not empty
         always {
-          // optional: collect JUnit XML if produced
+          echo "Unit tests finished (success/failure). Collect results if available."
+          // If you generate junit xml inside the container, copy it to workspace and use junit step
+          // junit '**/TEST-*.xml'
         }
       }
     }
@@ -56,7 +55,6 @@ pipeline {
       }
       steps {
         script {
-          // use sonar-scanner docker image and mount repo
           sh """
             docker run --rm \
               -e SONAR_HOST_URL='${SONAR_HOST}' \
@@ -75,22 +73,27 @@ pipeline {
     stage('Security Scan: Trivy') {
       steps {
         script {
-          // Run trivy as docker container; mount docker socket to scan local images
           sh """
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --format json --output trivy-report.json ${IMAGE_BASE}:${IMAGE_TAG} || true
           """
-          // fail build if any HIGH/CRITICAL vulnerabilities (uses jq)
+
+          // Fail build if HIGH/CRITICAL found (requires jq on agent). If jq missing, this prints the report and continues.
           sh '''
             if [ -f trivy-report.json ]; then
-              if cat trivy-report.json | jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")' | grep -q .; then
-                echo "Trivy found HIGH/CRITICAL vulnerabilities — failing build"
-                jq '.Results[].Vulnerabilities[] | {Severity, VulnerabilityID, PkgName, InstalledVersion}' trivy-report.json || true
-                exit 1
+              if command -v jq >/dev/null 2>&1; then
+                if cat trivy-report.json | jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")' | grep -q .; then
+                  echo "Trivy found HIGH/CRITICAL vulnerabilities — failing build"
+                  cat trivy-report.json
+                  exit 1
+                else
+                  echo "No HIGH/CRITICAL vulnerabilities found by Trivy"
+                fi
               else
-                echo "No HIGH/CRITICAL vulnerabilities found by Trivy"
+                echo "jq not installed on agent; printing Trivy report for manual inspection"
+                cat trivy-report.json || true
               fi
             else
-              echo "No trivy-report.json found"
+              echo "trivy-report.json not produced"
             fi
           '''
         }
@@ -113,31 +116,20 @@ pipeline {
         }
       }
     }
-
-    stage('Push Image: AWS ECR (optional)') {
-      when { expression { return false } } // change to true to enable
-      steps {
-        script {
-          withCredentials([usernamePassword(credentialsId: "${AWS_CRED_ID}", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-            sh """
-              # configure aws cli on the agent (assumes aws cli installed)
-              aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID}
-              aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY}
-              aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
-              docker tag ${IMAGE_BASE}:${IMAGE_TAG} <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/${IMAGE_BASE}:${IMAGE_TAG}
-              docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/${IMAGE_BASE}:${IMAGE_TAG}
-            """
-          }
-        }
-      }
-    }
   }
 
   post {
-    success { echo "CI pipeline finished: SUCCESS" }
-    failure { echo "CI pipeline finished: FAILED" }
+    success {
+      echo "CI pipeline completed successfully."
+    }
+    failure {
+      echo "CI pipeline failed. Check logs."
+    }
     always {
-      sh "docker image prune -f || true"
+      script {
+        echo "Cleaning up local images and temporary files"
+        sh "docker image prune -f || true"
+      }
     }
   }
 }
